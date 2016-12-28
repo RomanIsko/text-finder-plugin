@@ -19,6 +19,7 @@ import hudson.util.FormValidation;
 import org.apache.tools.ant.DirectoryScanner;
 import org.apache.tools.ant.types.FileSet;
 import org.apache.commons.io.IOUtils;
+import org.jenkinsci.remoting.RoleChecker;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 
@@ -99,6 +100,11 @@ public class TextFinderPublisher extends Recorder implements Serializable {
 
             if(fileSet!=null) {
                 foundText |= build.getWorkspace().act(new FileCallable<Boolean>() {
+                    @Override
+                    public void checkRoles(RoleChecker roleChecker) throws SecurityException {
+
+                    }
+
                     public Boolean invoke(File ws, VirtualChannel channel) throws IOException {
                         PrintStream logger = new PrintStream(ros);
 
