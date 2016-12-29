@@ -8,10 +8,10 @@
     <label class="attach-previous">${%Also search the console output}</label>
   </f:entry>
   <f:entry field="checkInterval" title="${%Check interval (seconds)}">
-    <f:number/>
+    <f:number default="0"/>
   </f:entry>
-  <f:entry field="retryTimes" title="${%Repeat check times}">
-    <f:number/>
+  <f:entry field="tryTimes" title="${%Check times}">
+    <f:number default="1"/>
   </f:entry>
   <f:entry field="regexp" title="${%Regular expression}">
     <f:textbox/>
