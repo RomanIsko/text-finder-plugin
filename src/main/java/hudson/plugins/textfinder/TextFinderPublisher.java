@@ -1,10 +1,9 @@
 package hudson.plugins.textfinder;
 
+import hudson.Extension;
 import hudson.FilePath.FileCallable;
 import hudson.Launcher;
 import hudson.Util;
-import hudson.Extension;
-import static hudson.Util.fixEmpty;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
@@ -16,23 +15,21 @@ import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Publisher;
 import hudson.tasks.Recorder;
 import hudson.util.FormValidation;
+import hudson.util.TimeUnit2;
+import org.apache.commons.io.IOUtils;
 import org.apache.tools.ant.DirectoryScanner;
 import org.apache.tools.ant.types.FileSet;
-import org.apache.commons.io.IOUtils;
 import org.jenkinsci.remoting.RoleChecker;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 
 import javax.servlet.ServletException;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.io.Serializable;
+import java.io.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+
+import static hudson.Util.fixEmpty;
 
 /**
  * Text Finder plugin for Jenkins. Search in the workspace using a regular 
@@ -46,19 +43,23 @@ public class TextFinderPublisher extends Recorder implements Serializable {
     public final String regexp;
     public final boolean succeedIfFound;
     public final boolean unstableIfFound;
+    public final Integer checkInterval;
+    public final Integer tryTimes;
     /**
      * True to also scan the whole console output
      */
     public final boolean alsoCheckConsoleOutput;
 
     @DataBoundConstructor
-    public TextFinderPublisher(String fileSet, String regexp, boolean succeedIfFound, boolean unstableIfFound, boolean alsoCheckConsoleOutput) {
+    public TextFinderPublisher(String fileSet, String regexp, boolean succeedIfFound, boolean unstableIfFound, boolean alsoCheckConsoleOutput, Integer checkInterval, Integer tryTimes) {
         this.fileSet = Util.fixEmpty(fileSet.trim());
         this.regexp = regexp;
         this.succeedIfFound = succeedIfFound;
         this.unstableIfFound = unstableIfFound;
         this.alsoCheckConsoleOutput = alsoCheckConsoleOutput;
-        
+        this.checkInterval = checkInterval;
+        this.tryTimes = tryTimes;
+
         // Attempt to compile regular expression
         try {
             Pattern.compile(regexp);
@@ -82,7 +83,7 @@ public class TextFinderPublisher extends Recorder implements Serializable {
     private static final class AbortException extends RuntimeException {
     }
 
-    private void findText(AbstractBuild build, PrintStream logger) throws IOException, InterruptedException {
+    private void findText(AbstractBuild build, final PrintStream logger) throws IOException, InterruptedException {
         try {
             boolean foundText = false;
 
@@ -105,47 +106,19 @@ public class TextFinderPublisher extends Recorder implements Serializable {
 
                     }
 
-                    public Boolean invoke(File ws, VirtualChannel channel) throws IOException {
-                        PrintStream logger = new PrintStream(ros);
-
-                        // Collect list of files for searching
-                        FileSet fs = new FileSet();
-                        org.apache.tools.ant.Project p = new org.apache.tools.ant.Project();
-                        fs.setProject(p);
-                        fs.setDir(ws);
-                        fs.setIncludes(fileSet);
-                        DirectoryScanner ds = fs.getDirectoryScanner(p);
-
-                        // Any files in the final set?
-                        String[] files = ds.getIncludedFiles();
-                        if (files.length == 0) {
-                            logger.println("Jenkins Text Finder: File set '" +
-                                    fileSet + "' is empty");
-                            throw new AbortException();
-                        }
-
-                        Pattern pattern = compilePattern(logger);
-
-                        boolean foundText = false;
-
-                        for (String file : files) {
-                            File f = new File(ws, file);
-
-                            if (!f.exists()) {
-                                logger.println("Jenkins Text Finder: Unable to" +
-                                    " find file '" + f + "'");
-                                continue;
+                    public Boolean invoke(File ws, VirtualChannel channel) throws IOException, InterruptedException {
+                        int counter = 0;
+                        boolean res = false;
+                        while (counter < tryTimes) {
+                            if (checkInterval > 0) {
+                                TimeUnit2.SECONDS.sleep(checkInterval);
+                                logger.println("Waiting " + checkInterval + " seconds");
                             }
-                            if (!f.canRead()) {
-                                logger.println("Jenkins Text Finder: Unable to" +
-                                    " read from file '" + f + "'");
-                                continue;
-                            }
-
-                            foundText |= checkFile(f, pattern, logger, false);
+                            res = invokeCheckFile(ws, ros);
+                            if (res) return true;
+                            counter++;
                         }
-
-                        return foundText;
+                        return res;
                     }
                 });
             }
@@ -156,6 +129,49 @@ public class TextFinderPublisher extends Recorder implements Serializable {
             // no test file found
             build.setResult(Result.UNSTABLE);
         }
+    }
+
+    private Boolean invokeCheckFile(File ws, RemoteOutputStream ros) {
+        PrintStream logger = new PrintStream(ros);
+
+        // Collect list of files for searching
+        FileSet fs = new FileSet();
+        org.apache.tools.ant.Project p = new org.apache.tools.ant.Project();
+        fs.setProject(p);
+        fs.setDir(ws);
+        fs.setIncludes(fileSet);
+        DirectoryScanner ds = fs.getDirectoryScanner(p);
+
+        // Any files in the final set?
+        String[] files = ds.getIncludedFiles();
+        if (files.length == 0) {
+            logger.println("Jenkins Text Finder: File set '" +
+                    fileSet + "' is empty");
+            throw new AbortException();
+        }
+
+        Pattern pattern = compilePattern(logger);
+
+        boolean foundText = false;
+
+        for (String file : files) {
+            File f = new File(ws, file);
+
+            if (!f.exists()) {
+                logger.println("Jenkins Text Finder: Unable to" +
+                    " find file '" + f + "'");
+                continue;
+            }
+            if (!f.canRead()) {
+                logger.println("Jenkins Text Finder: Unable to" +
+                    " read from file '" + f + "'");
+                continue;
+            }
+
+            foundText |= checkFile(f, pattern, logger, false);
+        }
+
+        return foundText;
     }
 
     /**
